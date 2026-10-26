@@ -1,9 +1,9 @@
 # Experimental F4 UEFI source package
 
-Revision 2 has run the F4 XNU loader and a static RAM-root user program.
-Revision 3 adds the pinned vendor storage drivers; the user reports a successful
-64-KiB iosroot read. Full iOS boot with the new storage configuration remains
-pending. See TEST-RESULTS.md for the per-stage evidence and limitations.
+Revision 2 established EFI application execution and XNU diagnostic handoff.
+Storage-enabled revision 3 read iosroot and is used by the iOS RAM-boot profiles.
+SpringBoard, native touch and accelerated UI have since been reported; see
+[device results](TEST-RESULTS.md) and the [current status](../README.md).
 
 ## Provenance
 
@@ -31,9 +31,9 @@ F4 changes:
   This isolates a possible inherited-clock/TA initialization problem; see
   `TEST-RESULTS.md` for evidence and limits.
 
-The simple framebuffer uses the inherited ABL scanout assumption. Its address,
-stride, and format still require physical validation. A successful compile does
-not establish USB, display, TzDxe initialization, or XNU compatibility.
+The inherited framebuffer was observed at 0x9C000000 with 1080x2400 BGR output
+and 1080-pixel stride. These observations validate the recorded device setup,
+not arbitrary firmware revisions or controller-based presentation.
 
 ## Rebuild
 
@@ -61,8 +61,8 @@ Android boot image, and must not be passed directly to fastboot.
 
 `pack-diagnostic.py` compiles `diagnostic.c`, embeds it as the only XNUP entry,
 and packages the FD plus captured live F4 DTB in a boot-header-v1 image. This
-uses the UMI/Mu boot format as an initial compatibility probe; Android's installed
-header-v3 format does not establish whether ABL will accept this temporary image.
+uses the UMI/Mu boot format that was accepted during the recorded device tests.
+The installed Android header-v3 image is a separate packaging input.
 
 ```sh
 python3 devices/poco-f4/uefi/pack-diagnostic.py \
@@ -78,25 +78,17 @@ It never opens storage protocols or starts XNU. Photograph the displayed results
 
 Test only the packaged image with `fastboot boot`; no partition flash is needed.
 
-## Host validation, 2026-10-26
+## Validation and DEBUG builds
 
-- Mu-Silicium RELEASE/CLANGPDB build succeeded with clang/lld 21.1.8.
-- Raw FD size: 3145728 bytes. Original vendor PE32 bytes retained.
-- Diagnostic application compiled with warnings treated as errors and linked
-  without runtime libraries as an ARM64 EFI application.
-- Packaged image size: 1726464 bytes.
-- Image SHA256: `d464ef14c87932ec4741b339694c9d0fda99783f217fd7e9b3498ab7d042078b`.
-- Re-read the boot header, decompressed its kernel, verified the exact FD and DTB,
-  parsed its XNUP entry, and checked the ARM64 PE machine type and EFI subsystem.
-- The first device test subsequently reported a black screen and reboot after
-  approximately 5–10 seconds. UEFI entry, display, USB transfer, and XNU remain
-  unverified; see `TEST-RESULTS.md`.
+The recorded RELEASE/CLANGPDB firmware build produced a 3145728-byte FD.
+Diagnostic applications compiled as ARM64 EFI executables with warnings treated
+as errors. Device outcomes, including the initial failed probe and subsequent
+successful revision 2, are consolidated in [TEST-RESULTS.md](TEST-RESULTS.md).
 
-Local outputs and logs are in the workspace's ignored `artifacts/munch-build/`.
-
-Set `BUILD_TARGET=DEBUG` when invoking `build.sh` to enable early framebuffer
-debug logging. Use the FD and its manifest under `DEBUG_CLANGPDB` when packaging
-that variant; the packer preserves the build target in the image metadata.
+Set `BUILD_TARGET=DEBUG` to enable framebuffer debug output and assertions.
+Package the corresponding DEBUG FD together with its `.munch.json` manifest.
+The packer records the build target, image/payload hashes and shim size.
+Generated artifacts and vendor executables remain outside Git.
 
 ## USB round-trip probe
 
@@ -125,8 +117,8 @@ UFSDxe, DiskIoDxe and PartitionDxe modules. This produces FD diagnostic revision
 it using pack-diagnostic.py --root-probe. The application enumerates Block I/O,
 connects those controllers recursively and reads the first 64 KiB of exactly
 one iosroot GPT partition. It never calls write_blocks or flush_blocks. The
-new driver configuration still needs device testing; do not assume earlier
-XNU checkpoint successes validate this FD.
+revision-3 device test reported a successful 64-KiB read. Full iOS RAM-boot
+profiles subsequently used this storage-enabled FD.
 
 ### Shim overlap regression check
 
@@ -138,3 +130,19 @@ run `python3 devices/poco-f4/uefi/check-bootshim.py` from the repository root.
 The test executes the actual compiled ARM64 shim and checks seven relocation
 layouts, preserved x0/x1 and invalid-range rejection. Image manifests record
 `shim_size`; old 208-byte-shim images remain supported by the inspector.
+
+## Display observation probes
+
+`--panel-te-probe` passively measures GPIO66 TE cadence; the recorded result was
+approximately 60.68 Hz. `--display-scan-probe` observes INTF1 counter/configuration
+state and three measurement windows. The latter is the pending device test:
+
+```sh
+python3 devices/poco-f4/uefi/pack-diagnostic.py --display-scan-probe \
+    --fd /path/to/reviewed.fd --dtb /path/to/live.dtb \
+    --output /path/to/munch-display-scan-r1.img
+```
+
+The scan probe may temporarily enable guarded display bus clocks and restores
+them on ordinary return paths. It does not change DSI/DPU presentation registers
+or start iOS. See [display notes](../display/README.md) for measurement limits.

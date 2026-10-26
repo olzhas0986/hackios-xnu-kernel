@@ -26,7 +26,8 @@ restores the baseline framebuffer implementation.
 Validation: the native kernel build target passed with BUILD_DSYM=0;
 `check-te-frame.c` passed with AddressSanitizer and UndefinedBehaviorSanitizer
 for geometry, period, copy-window, lateness and overflow policy. The packed
-image passed the independent image verifier. Hardware results are pending.
+image passed the independent image verifier. The subsequent device test felt
+slower and did not resolve tearing; see the rollback below.
 
 `munch-ios165-gpu-te-r1.img` retains the existing Mesa helper and iOS root,
 requests the reviewed 587-MHz GPU selection, keeps software refresh at 60 Hz,

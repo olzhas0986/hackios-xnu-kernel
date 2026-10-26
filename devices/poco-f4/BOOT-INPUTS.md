@@ -42,7 +42,8 @@ The original F4 TzDxe PE32 hash is
 `2ff06cf1ccd084d73a5a18bf781dbf1a5c7851b31322825fa0a784dfa8ab637e`.
 It differs from UMI's guarded revision and from the alioth patched template.
 No UMI binary offset patch or foreign driver executable is used in the F4 overlay.
-TzDxe initialization remains a device-test item.
+The original module is retained in the FD used by subsequent successful UEFI
+and iOS tests; those results do not validate arbitrary XBL revisions.
 
 ## Reproduce inspection
 
