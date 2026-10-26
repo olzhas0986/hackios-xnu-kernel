@@ -505,3 +505,14 @@ default. The new profile also omits `-v` to avoid verbose framebuffer scrolling.
 number registered/running is a device-test result, not a host-build guarantee.
 The existing touch overlay, APFS installation and 600-second return timer are
 retained. GPU acceleration and frequency control are not added by this change.
+
+### Source-built A650 profiles
+
+`--native-gpu-config` accepts two explicit profiles: `munch-a650-diagnostic-22`
+for the bounded hardware drawing test, and `munch-a650-ios-gpu` for normal iOS
+startup with a retained GPU. Both require checkpoint 58, eight requested CPUs,
+touch handoff and the source-built early-query fix. They retain the low SCM
+metadata reservation. The iOS profile additionally pins a checked graphics
+report matching the helper's hash and HakiosGPU/Mesa 25.0.7 integration. Build
+the separate GL helper with `gpu/prepare-gl-helper.py`; do not replace the
+installed system image or mix the HKGPU and HakiosGPU userland interfaces.
