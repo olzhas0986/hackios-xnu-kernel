@@ -12,6 +12,7 @@ p.add_argument('--base', required=True, type=Path)
 p.add_argument('--mesa', required=True, type=Path)
 p.add_argument('--sdk', required=True, type=Path)
 p.add_argument('--output', required=True, type=Path)
+p.add_argument('--no-compression', action='store_true', help='Build a plain APFS helper without multiprocessing compression')
 a = p.parse_args()
 for field in ('base', 'mesa', 'sdk', 'output'):
     setattr(a, field, getattr(a, field).resolve())
@@ -77,9 +78,12 @@ mesa_bytes = (a.mesa / 'libOSMesa.8.dylib').read_bytes()
 if b'HakiosGPU' not in mesa_bytes or b'freedreno' not in mesa_bytes:
     raise ValueError('Mesa lacks the freedreno/HakiosGPU integration')
 image = a.output / 'root.apfs'
-subprocess.run(['python3', str(root / 'tools/apfs/mkapfs.py'), '-z', '--plain', 'fw', '-o', str(image), 'redwood=' + str(helper)], check=True)
+subprocess.run(['python3', str(root / 'tools/apfs/mkapfs.py')]
+               + ([] if a.no_compression else ['-z'])
+               + ['--plain', 'fw', '-o', str(image), 'redwood=' + str(helper)], check=True)
 subprocess.run(['bash', str(root / 'tools/apfs/check-image.sh'), str(image), 'redwood=' + str(helper)], check=True)
 report = {'mesa_version': '25.0.7', 'driver': 'freedreno', 'service': 'HakiosGPU', 'hardware_tested': False,
+          'apfs_compressed': not a.no_compression,
           'helper': {'path': str(image), 'size': image.stat().st_size, 'sha256': sha(image)},
           'mesa': {'sha256': sha(a.mesa / 'libOSMesa.8.dylib'), 'dependencies': mesa_deps},
           'bridge': {'sha256': sha(bridge), 'dependencies': bridge_deps},

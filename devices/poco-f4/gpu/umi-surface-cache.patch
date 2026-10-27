@@ -1,0 +1,97 @@
+--- a/iokit/Kernel/hakios.gpu.cpp
++++ b/iokit/Kernel/hakios.gpu.cpp
+@@ -54,6 +54,7 @@
+ void hakios_gpu_mapped(void);
+ void hakios_gpu_unmap(uint64_t address, uint64_t size);
+ void hakios_gpu_to_memory(void * start, uint64_t size);
++void hakios_gpu_from_memory(void * start, uint64_t size);
+ uint32_t hakios_gpu_submit(const uint64_t * addresses, const uint32_t * words, uint32_t count);
+ extern uint32_t gpu_log;
+ bool hakios_gpu_done(uint32_t fence);
+@@ -162,6 +163,7 @@
+ #define MSM_BO_GPU_READONLY     0x00000002
+ #define MSM_PREP_NOSYNC         0x04
+ #define MSM_SUBMIT_CMD_BUF      1
++#define MSM_SUBMIT_BO_WRITE     0x0002
+ #define MSM_SUBMIT_FENCE_FD_OUT 0x20000000
+ 
+ #define GPU_BUFFERS             8192            /* a client's, at most */
+@@ -217,12 +219,34 @@
+ bool
+ MiniIOSurfaceDrawn(MiniIOSurface * surface, uint64_t milliseconds)
+ {
+-	uint32_t fence = surface->drawn;
+ 	bool done = true;
+ 
+-	if (fence != 0 && gGPULock != NULL) {
++	if (gGPULock != NULL) {
+ 		IOLockLock(gGPULock);
+-		done = !hakios_gpu_ready() || gpuWait(fence, milliseconds);
++		uint32_t fence = surface->drawn;
++		bool ready = hakios_gpu_ready();
++		bool stable = fence == 0 || !ready;
++		done = stable;
++		/* Waiting drops gGPULock; if the surface was submitted again, wait for its fence too. */
++		for (unsigned retry = 0; ready && fence != 0 && retry < 4; retry++) {
++			done = gpuWait(fence, milliseconds);
++			if (!done) break;
++			uint32_t latest = surface->drawn;
++			if (latest == fence) {
++				stable = true;
++				break;
++			}
++			fence = latest;
++			if (fence == 0) {
++				stable = true;
++				break;
++			}
++		}
++		if (done && ready && !stable) done = false;
++		if (done && ready && stable && surface->gpu_written) {
++			hakios_gpu_from_memory(surface->kpixels, surface->info.allocSize);
++			surface->gpu_written = false;
++		}
+ 		IOLockUnlock(gGPULock);
+ 	}
+ 	return done;
+@@ -911,7 +935,8 @@
+ 		if (b->surface != NULL) {
+ 			uint32_t seed = b->surface->shared()->seed;
+ 
+-			if (seed == b->seed && !b->seen && began - b->pushed < again) {
++			if (seed == b->seed && !b->seen && began - b->pushed < again &&
++			    !(bos[i].flags & MSM_SUBMIT_BO_WRITE)) {
+ 				continue;
+ 			}
+ 			b->seed = seed;
+@@ -974,6 +999,9 @@
+ 			b->fence = request->fence;
+ 			if (b->surface != NULL) {
+ 				b->surface->drawn = request->fence;
++				if (bos[i].flags & MSM_SUBMIT_BO_WRITE) {
++					b->surface->gpu_written = true;
++				}
+ 			}
+ 		}
+ 	}
+--- a/iokit/Kernel/MiniIOSurface.h
++++ b/iokit/Kernel/MiniIOSurface.h
+@@ -117,7 +117,8 @@
+ 	task_t                          clientTask;     /* whose memory it is (not held: only compared) */
+ 	mach_vm_address_t               clientAddress;  /* ... and where it is there */
+ 	uint8_t *                       kpixels;        /* where the pixel memory starts in the kernel, either way */
+-	uint32_t                        drawn;          /* the GPU's last submission that names the pixels (0: none; hakios.gpu.cpp) */
++	uint32_t                        drawn;          /* the GPU's last submission that names the pixels (0: none; HakiosGPU.cpp) */
++	bool                            gpu_written;    /* CPU cache lines may be stale after that submission */
+ 	struct minisurf_result          info;           /* addresses not filled in */
+ 	struct minisurf_plane           planes[MINISURF_MAX_PLANES];
+ 	OSDictionary *                  values;
+@@ -128,6 +129,8 @@
+ 	virtual bool
+ 	init(void) APPLE_KEXT_OVERRIDE
+ 	{
++		drawn = 0;
++		gpu_written = false;
+ 		return OSObject::init();
+ 	}
+ 	virtual void free(void) APPLE_KEXT_OVERRIDE;

@@ -8,7 +8,9 @@ import tempfile
 from pathlib import Path
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('tree', type=Path)
-p.add_argument('--te-staging', action='store_true', help='Stage the opt-in passive-TE framebuffer experiment')
+display_mode = p.add_mutually_exclusive_group()
+display_mode.add_argument('--te-staging', action='store_true', help='Stage the opt-in passive-TE framebuffer experiment')
+display_mode.add_argument('--command-staging', action='store_true', help='Stage UMI-derived command DMA synchronization (fb_scan=1)')
 p.add_argument('--touch-poll-ms', type=int, choices=(4, 16), default=16, help='Delay between native touch reads; 4 ms is experimental')
 p.add_argument('--report', required=True, type=Path)
 a = p.parse_args()
@@ -31,6 +33,25 @@ with tempfile.TemporaryDirectory(prefix='munch-native-stage-') as directory:
 existing = a.tree / 'bsd/dev/hakios.adreno.c'
 if existing.read_bytes() not in (original, gpu):
     raise ValueError('Refusing to overwrite independently modified GPU source')
+# The C invalidation routine needs the matching IOSurface writer tracking and
+# fence-stability checks in the IOKit consumer, not just the Adreno C driver.
+cache_paths = ('iokit/Kernel/hakios.gpu.cpp', 'iokit/Kernel/MiniIOSurface.h')
+cache_hashes = {}
+with tempfile.TemporaryDirectory(prefix='munch-surface-cache-') as directory:
+    work = Path(directory)
+    for name in cache_paths:
+        path = work / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((root / 'xnu/files' / name).read_bytes())
+    subprocess.run(['git', 'apply', str(here / 'umi-surface-cache.patch')], cwd=work, check=True)
+    for name in cache_paths:
+        target = a.tree / name
+        data = (work / name).read_bytes()
+        if target.read_bytes() not in ((root / 'xnu/files' / name).read_bytes(), data):
+            raise ValueError('Refusing to overwrite independent surface cache changes: ' + name)
+        cache_hashes[name] = sha(data)
+    for name in cache_paths:
+        (a.tree / name).write_bytes((work / name).read_bytes())
 touch = (here.parent / 'touch/xnu-ft3658u.c').read_text()
 touch = touch.replace('extern struct state munch_state;', 'static struct state munch_state;')
 touch = touch.replace('__attribute__((section(".text.entry")))', '')
@@ -61,22 +82,39 @@ header = (here.parent / 'touch/ft3658u-protocol.h').read_bytes()
 fb_base = (root / 'xnu/files/iokit/Kernel/MiniIOMobileFramebuffer.cpp').read_bytes()
 if sha(fb_base) != 'c6aa9da0a649ae6adf784a00327a60b7bd21e10549c9094093301951971f6ebe':
     raise ValueError('Unexpected framebuffer port base')
-with tempfile.TemporaryDirectory(prefix='munch-display-stage-') as directory:
-    work = Path(directory)
-    path = work / 'iokit/Kernel/MiniIOMobileFramebuffer.cpp'
-    path.parent.mkdir(parents=True)
-    path.write_bytes(fb_base)
-    subprocess.run(['patch', '--batch', '--forward', '-p1', '-i', str(here.parent / 'display/munch-te-staging.patch')], cwd=work, check=True)
-    fb_patched = path.read_bytes()
+variants = {}
+for mode in ('te', 'command'):
+    with tempfile.TemporaryDirectory(prefix='munch-display-stage-') as directory:
+        work = Path(directory)
+        path = work / 'iokit/Kernel/MiniIOMobileFramebuffer.cpp'
+        path.parent.mkdir(parents=True)
+        path.write_bytes(fb_base)
+        subprocess.run(['git', 'apply', '--unidiff-zero', '--verbose', str(here.parent / f'display/munch-{mode}-staging.patch')], cwd=work, check=True)
+        variants[mode] = path.read_bytes()
 fb_target = a.tree / 'iokit/Kernel/MiniIOMobileFramebuffer.cpp'
-if fb_target.read_bytes() not in (fb_base, fb_patched):
+if (fb_target.read_bytes() not in (fb_base, *variants.values()) and
+        sha(fb_target.read_bytes()) not in ('e9b8496eba392eaaeba2ab6b2cab38d3f29f50b877d363b1dc306360a9929142',
+                                        '77554128ef40b10ad7be22c8fd4eba8197685faf9963431d467deb2dde3a4577',
+                                        '17db9b4a603022f2e9138b3bc002e75c31a30c8d974ef320a4f4b2926de0e768')):
     raise ValueError('Refusing to overwrite independent framebuffer changes')
-fb_target.write_bytes(fb_patched if a.te_staging else fb_base)
+fb_target.write_bytes(variants['command'] if a.command_staging else variants['te'] if a.te_staging else fb_base)
 (a.tree / 'iokit/Kernel/munch-te-frame.h').write_bytes((here.parent / 'display/te-frame.h').read_bytes())
+scan_source = (here.parent / 'display/munch-command-scan.inc').read_bytes()
+(a.tree / 'iokit/Kernel/munch-command-scan.inc').write_bytes(scan_source)
 report = {'xnu_base': base, 'umi_reference': '6b6fb2b0c5a1720496ec71e88c95d2a45a0046a4',
           'early_return_source_sha256': sha(early.encode()), 'gpu_source_sha256': sha(gpu), 'touch_source_sha256': sha(touch.encode()),
           'touch_header_sha256': sha(header), 'gpu_patch_sha256': sha((here / 'umi-a650.patch').read_bytes()),
           'native_touch_bootarg': 'munch_touch=1', 'touch_poll_sleep_ms': a.touch_poll_ms, 'display_te_staging': a.te_staging,
+          'display_command_staging': a.command_staging,
+          'display_status_hud': a.command_staging,
+          'display_copy_remeasurement': a.command_staging,
+          'display_recent_copy_peak': a.command_staging,
+          'display_presented_fps': a.command_staging,
+          'display_hud_fps_only': a.command_staging,
+          'surface_cache_sources': cache_hashes,
+          'surface_cache_patch_sha256': sha((here / 'umi-surface-cache.patch').read_bytes()),
+          'display_scan_source_sha256': sha(scan_source),
+          'display_command_patch_sha256': sha((here.parent / 'display/munch-command-staging.patch').read_bytes()),
           'display_source_sha256': sha(fb_target.read_bytes()),
           'display_header_sha256': sha((here.parent / 'display/te-frame.h').read_bytes()), 'hardware_tested': False}
 a.report.parent.mkdir(parents=True, exist_ok=True)
