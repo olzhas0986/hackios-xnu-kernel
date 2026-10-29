@@ -1,0 +1,26 @@
+{
+  "source": "out/munch-wifi/logs/wifi-memory-r1.txt",
+  "sha256": "072b95c16f144c35ed3b092baa7a0e3673ff32ce32353c062d73a8dafb86928c",
+  "bytes": 106552,
+  "hardware_tested": true,
+  "kernel_return": "returned 103969 0",
+  "host_reported_upload_seconds": 0.096,
+  "memory_preflight_passed": true,
+  "allocated_pa": "0x1920b8000",
+  "allocation_bytes": 16384,
+  "allocation_released": true,
+  "context_ownership_claimed": false,
+  "candidate_predicates_passed": [
+    6,
+    7
+  ],
+  "candidates_with_pending_faults": [
+    3,
+    5
+  ],
+  "sid_route_found": false,
+  "root_command": "0x400",
+  "endpoint_command": "0x400",
+  "dma_approved": false,
+  "wifi_operational": false
+}

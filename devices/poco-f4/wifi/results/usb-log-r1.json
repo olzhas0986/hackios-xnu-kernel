@@ -1,0 +1,54 @@
+{
+  "source": "out/munch-wifi/logs/wifi-usb-r1.txt",
+  "sha256": "e992283657c300cce7c9d917b922e0b612114ddb29b01ecdddbd4f468526a7ed",
+  "bytes": 105330,
+  "hardware_tested": true,
+  "transport": "post-XNU-return UEFI fastboot upload",
+  "host_reported_seconds": 0.095,
+  "kernel_return": "returned 102767 0",
+  "pci_id": "17cb:1101",
+  "subsystem": "17cb:0108",
+  "root_command": "0x400",
+  "endpoint_command": "0x400",
+  "sid_route_found": false,
+  "sid_cycle": false,
+  "root_smr_matches": 0,
+  "endpoint_smr_matches": 0,
+  "context_banks": [
+    {
+      "index": 3,
+      "observations": [
+        "MUNCH Wi-Fi: CB3 pa=0x15083000 SCTLR=0xe0 FSR=0x400",
+        "MUNCH Wi-Fi: CB3 CBAR=0x100ff CBA2R=0x1 TTBR0=0:0",
+        "MUNCH Wi-Fi: CB3 TCR=0 TCR2=0x40010072; observation only"
+      ]
+    },
+    {
+      "index": 5,
+      "observations": [
+        "MUNCH Wi-Fi: CB5 pa=0x15085000 SCTLR=0xe0 FSR=0x400",
+        "MUNCH Wi-Fi: CB5 CBAR=0x100ff CBA2R=0x1 TTBR0=0:0",
+        "MUNCH Wi-Fi: CB5 TCR=0 TCR2=0x38071; observation only"
+      ]
+    },
+    {
+      "index": 6,
+      "observations": [
+        "MUNCH Wi-Fi: CB6 pa=0x15086000 SCTLR=0xa1f0106 FSR=0",
+        "MUNCH Wi-Fi: CB6 CBAR=0 CBA2R=0 TTBR0=0:0",
+        "MUNCH Wi-Fi: CB6 TCR=0 TCR2=0x38071; observation only"
+      ]
+    },
+    {
+      "index": 7,
+      "observations": [
+        "MUNCH Wi-Fi: CB7 pa=0x15087000 SCTLR=0xc00106 FSR=0",
+        "MUNCH Wi-Fi: CB7 CBAR=0 CBA2R=0 TTBR0=0:0",
+        "MUNCH Wi-Fi: CB7 TCR=0 TCR2=0x38071; observation only"
+      ]
+    }
+  ],
+  "survey_passed": true,
+  "dma_approved": false,
+  "wifi_operational": false
+}

@@ -1,0 +1,101 @@
+{
+  "device": "munch",
+  "evidence": "user photograph, manually transcribed; not a binary MMIO dump",
+  "photo_sha256": "4fcc17e6793a3d96683e520a2a3ad802e268deeedbcc0a663ee86ce8c28bda7f",
+  "reported_image_sha256": "b1c94fcf667ee88439dc7dbad7ba346b85f9da803b387bba70fcdfe33305afba",
+  "image_identity_verified_from_photo": false,
+  "cmd_db": {
+    "version": "0x1",
+    "magic": "0xc0330db",
+    "flags": "0x0"
+  },
+  "resources": {
+    "smpa6": "0x40200",
+    "smpa4": "0x40000",
+    "smpa5": "0x40100",
+    "smpc8": "0x40400",
+    "ldoa9": "0x41b00",
+    "ldoa5": "0x41800",
+    "ldoa16": "0x40b00",
+    "cx.lvl": "0x30000",
+    "smpf2": null
+  },
+  "rsc": {
+    "id": "0x20000",
+    "config": "0x800c8104",
+    "tcs": 8,
+    "commands_per_tcs": 16,
+    "irq_status": "0x0"
+  },
+  "slots": [
+    {
+      "slot": 0,
+      "type": "ACTIVE",
+      "ctl": "0x1010000",
+      "idle": "0x1",
+      "en": "0x3",
+      "wait": "0x0"
+    },
+    {
+      "slot": 1,
+      "type": "ACTIVE",
+      "ctl": "0x10000",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 2,
+      "type": "SLEEP",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 3,
+      "type": "SLEEP",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 4,
+      "type": "SLEEP",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 5,
+      "type": "WAKE",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 6,
+      "type": "WAKE",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    },
+    {
+      "slot": 7,
+      "type": "WAKE",
+      "ctl": "0x0",
+      "idle": "0x1",
+      "en": "0x0",
+      "wait": "0x0"
+    }
+  ],
+  "enabled_command_contents_observed": false,
+  "loader_return_visible": true,
+  "survey_verdict_line_visible": false,
+  "pcie_enumerated": false,
+  "wifi_functional": false
+}

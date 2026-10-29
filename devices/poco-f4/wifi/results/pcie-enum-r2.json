@@ -1,0 +1,37 @@
+{
+  "device": "munch",
+  "evidence": "user photograph, manually transcribed; not an MMIO dump",
+  "photo_sha256": "6a5649c67707ffe97d901427c1e80e7b2de8498b1c96b970c7f5f0778cf44e02",
+  "reported_image_sha256": "f34653b92ec630b1303782219f8e7f8faf1798ed7a5e0892ab7be3cdd4a69c37",
+  "image_identity_verified_from_photo": false,
+  "step": 3,
+  "cx_svs_index": 5,
+  "cx_level_count": 9,
+  "inherited_commands_visible": [
+    {
+      "slot": 0,
+      "command": 0,
+      "address": "0x30000",
+      "data": "0x2",
+      "msgid": "0x10008",
+      "status": "0x101",
+      "resource": "cx.lvl",
+      "abstract_level": 64
+    },
+    {
+      "slot": 0,
+      "command": 1,
+      "address": "0x30010",
+      "data": "0x2",
+      "msgid": "0x10008",
+      "status": "0x101",
+      "resource": null
+    }
+  ],
+  "other_arc_resource_name_validated": false,
+  "preflight_result": "rejected; no writes",
+  "power_votes_issued": false,
+  "pcie_enumerated": false,
+  "loader_return_visible": true,
+  "wifi_functional": false
+}

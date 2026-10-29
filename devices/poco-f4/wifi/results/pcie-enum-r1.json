@@ -1,0 +1,26 @@
+{
+  "device": "munch",
+  "evidence": "user photograph; manually transcribed",
+  "photo_sha256": "b30ff0e5559ccbc636ad8aeddffe95b48a7109378fe19a694bc0e7d7a764d452",
+  "reported_image_sha256": "c72bb1c6a3e3754924f4e2b1b2d91e9f4a9746e23ebab8c39f2e4e8407109aa0",
+  "image_identity_verified_from_photo": false,
+  "step": 3,
+  "inherited_commands_visible": [
+    {
+      "slot": 0,
+      "command": 0,
+      "address": "0x30000",
+      "data": "0x2",
+      "msgid": null,
+      "status": null
+    }
+  ],
+  "resource_identified_from_previous_survey": "cx.lvl",
+  "cx_abstract_level": null,
+  "cmd1_observed": false,
+  "preflight_result": "rejected; no writes",
+  "power_votes_issued": false,
+  "pcie_enumerated": false,
+  "loader_return_visible": true,
+  "wifi_functional": false
+}

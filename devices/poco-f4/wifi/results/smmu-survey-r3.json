@@ -1,0 +1,48 @@
+{
+  "device": "munch",
+  "evidence": "four supplied stills of a video; manually transcribed, no binary MMIO dump",
+  "photo_sha256": [
+    "200cdcdf001d39d4ddd327dbbdd78858305e6f71a48e5482ffb2afff92502ed5",
+    "9d7a8a7ed52405cb710b866ddf0c1bb4e1372c5190cf3a54cd138707d6ffceca",
+    "89fd3c76ed5882f65dd27fb11a6e4b1f442dab808f489c66803f61690bef90bb",
+    "f729d99591e1cb8f1419b846764b6228a7a224d418322f3ae05b47da527c355f"
+  ],
+  "reported_image_sha256": "70e598ede174625bff05099968d21dc446dfaf699d285e5fcb177cda039f2908",
+  "image_identity_verified_from_photo": false,
+  "sid_route_found": false,
+  "sid_cycle": false,
+  "smmu": {
+    "scr0": "0x250406",
+    "idr0": "0x4c017e57",
+    "idr1": "0x6000004a",
+    "idr2": "0x5111",
+    "groups": 87,
+    "invalid_smrs": 82,
+    "contexts": 74,
+    "referenced_contexts": 4,
+    "root_matches": 0,
+    "endpoint_matches": 0
+  },
+  "visible_translating_s2cr_context_indices": [
+    0,
+    1,
+    2,
+    2,
+    4
+  ],
+  "context_geometry_visible": {
+    "register_page": "0x1000",
+    "bank_base": "0x15080000",
+    "s2_only": 0
+  },
+  "derived_first_unreferenced_context": 3,
+  "derived_first_context_pa": "0x15083000",
+  "bank_register_values_observed": false,
+  "last_visible_stage": "CB geometry before GR1/bank reads",
+  "panic_backtrace_visible": true,
+  "exact_panic_site_symbolicated": false,
+  "wifi_reset_cleanup_confirmed": false,
+  "loader_touch_restore_visible": true,
+  "dma_approved": false,
+  "wifi_functional": false
+}

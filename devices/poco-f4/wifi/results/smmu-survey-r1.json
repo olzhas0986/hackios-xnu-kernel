@@ -1,0 +1,60 @@
+{
+  "device": "munch",
+  "evidence": "user photograph; manual transcription, not an MMIO dump",
+  "photo_sha256": "974b8c5f0ea3764f0e84b8e6dec19e6c3d846b42cbee784e0eca89969dc487f9",
+  "reported_image_sha256": "557a228136b91727d53138b1b9884524bdb7f00e0ee35f6e2187524f653b5843",
+  "image_identity_verified_from_photo": false,
+  "step": 4,
+  "endpoint_pci_id": "0x110117cb",
+  "endpoint_subsystem": "0x010817cb",
+  "endpoint_command": "0x400",
+  "root_command": "0x400",
+  "sid_config": "0x0",
+  "sid_bypass": false,
+  "expected_endpoint_sid": "0x1c01",
+  "sid_chain": [
+    {
+      "index": 21,
+      "entry": "0x10000004"
+    },
+    {
+      "index": 4,
+      "entry": "0xfff7ec7f"
+    },
+    {
+      "index": 127,
+      "entry": "0x28014040"
+    },
+    {
+      "index": 64,
+      "entry": "0xee9ffffa"
+    },
+    {
+      "index": 250,
+      "entry": "0xbfe3fffd"
+    },
+    {
+      "index": 253,
+      "entry": "0x83190000"
+    }
+  ],
+  "sid_route_found": false,
+  "sid_chain_cycle": false,
+  "smmu": {
+    "scr0": "0x250406",
+    "idr0": "0x4c017e57",
+    "idr1": "0x6000004a",
+    "idr2": "0x5111",
+    "groups": 87,
+    "invalid_smrs": 82,
+    "contexts": 74,
+    "referenced_contexts": 4,
+    "root_matches": 0,
+    "endpoint_matches": 0
+  },
+  "context_bank_state_observed": false,
+  "read_survey_finished_visible": true,
+  "loader_return_visible": true,
+  "dma_approved": false,
+  "wifi_functional": false
+}

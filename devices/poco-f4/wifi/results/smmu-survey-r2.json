@@ -1,0 +1,59 @@
+{
+  "device": "munch",
+  "evidence": "user photograph; manually transcribed, not an MMIO dump",
+  "photo_sha256": "5d0823a8e360f2fbfe547207788b6b11a9625c93a9c06f957adc084ba6bba1f6",
+  "reported_image_sha256": "a6025d1686cb10f8adf3f1f500ffdb0caa4053296291ddbfe1ca350bee067351",
+  "image_identity_verified_from_photo": false,
+  "step": 4,
+  "endpoint_pci_id": "0x110117cb",
+  "endpoint_subsystem": "0x010817cb",
+  "endpoint_command": "0x400",
+  "root_command": "0x400",
+  "link_status": "0x38110008",
+  "sid_config": "0x0",
+  "sid_bypass": false,
+  "sid_route_found": false,
+  "sid_chain_cycle": true,
+  "sid_chain_visible": [
+    {
+      "index": 21,
+      "entry": "0x10000080"
+    },
+    {
+      "index": 128,
+      "entry": "0xbfff7bdb"
+    },
+    {
+      "index": 219,
+      "entry": "0x48010001"
+    },
+    {
+      "index": 1,
+      "entry": "0x00640020"
+    },
+    {
+      "index": 32,
+      "entry": "0xfb7e9faf"
+    },
+    {
+      "index": 175,
+      "entry": "0x18008c02"
+    },
+    {
+      "index": 2,
+      "entry": "0xfbfff7fe"
+    },
+    {
+      "index": 254,
+      "entry": "0x7ecbf7ff"
+    }
+  ],
+  "remaining_cycle_entries_observed": false,
+  "smmu_read_started": false,
+  "context_bank_state_observed": false,
+  "survey_result": "failed before SMMU reads due to SID cycle",
+  "enumeration_result": "passed",
+  "loader_return_visible": true,
+  "dma_approved": false,
+  "wifi_functional": false
+}

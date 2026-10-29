@@ -1,0 +1,27 @@
+{
+  "device": "munch",
+  "evidence": "user photograph; manually transcribed, not a binary MMIO dump",
+  "photo_sha256": "c5d55ccf0d5a016a10e67c654dbfe8e07e257fdf009c9c891a8973741e76443f",
+  "reported_image_sha256": "f9981143feacf06195ca339d4be52db01548c2137a6fa17931d8273caf257474",
+  "image_identity_verified_from_photo": false,
+  "step": 3,
+  "last_rail_visible": {
+    "name": "ldoa5",
+    "minimum_mv": 880,
+    "tcs": 1,
+    "done": true
+  },
+  "earlier_vote_lines_fully_visible": false,
+  "endpoint_pci_id": "0x110117cb",
+  "endpoint_subsystem": "0x010817cb",
+  "endpoint_class_revision": "0x02800001",
+  "link_status": "0xb0120008",
+  "endpoint_command": "0x400",
+  "root_command": "0x400",
+  "enumeration_result": "passed",
+  "perst_asserted_wlan_low_reported": true,
+  "loader_return_visible": true,
+  "bus_mastering_enabled_at_snapshot": false,
+  "smmu_validated": false,
+  "wifi_functional": false
+}
