@@ -15,6 +15,35 @@ LOADER_SHA = '7104a1403bb0007a8fc7a7cf4dfb327bc7136a09ba9479f17e5eca449499557b'
 KERNEL_SHA = '04263e76d6cc8b13e8f9e89229afa8f4d3039d8f3714ca7fd1d6e8603091d28b'
 CMDLINE = '-v cpus=1 loader_return_after=8'
 
+def check_munch_wifi_power_layout(dtb):
+    """Require captured reserved RAM/RSC layout before the read-only step 2."""
+    expected = {
+        ('/reserved-memory/reserved-memory@80860000', 'reg'): [0, 0x80860000, 0, 0x20000],
+        ('/soc/rsc@18200000', 'reg'): [0x18200000, 0x10000, 0x18210000, 0x10000, 0x18220000, 0x10000],
+        ('/soc/rsc@18200000', 'qcom,drv-id'): [2],
+        ('/soc/rsc@18200000', 'qcom,tcs-offset'): [0xd00],
+        ('/soc/rsc@18200000', 'qcom,tcs-config'): [2, 2, 0, 3, 1, 3, 3, 1],
+    }
+    for (node, prop), values in expected.items():
+        raw = subprocess.check_output(['fdtget', '-t', 'x', str(dtb), node, prop], text=True)
+        if [int(v, 16) for v in raw.split()] != values:
+            raise ValueError('Unreviewed Wi-Fi CMD DB/RSC layout: ' + prop)
+    compatible = subprocess.check_output(['fdtget', '-t', 's', str(dtb),
+        '/reserved-memory/reserved-memory@80860000', 'compatible'], text=True).strip()
+    if compatible != 'qcom,cmd-db':
+        raise ValueError('Expected the captured command database reservation')
+
+
+def check_munch_epss(dtb):
+    """Stock CPU profile is allowed only for the captured compatible layout."""
+    node = '/soc/qcom,cpufreq-hw'
+    def get(prop, kind):
+        return subprocess.check_output(['fdtget', '-t', kind, str(dtb), node, prop], text=True).split()
+    if (get('compatible', 's') != ['qcom,cpufreq-hw-epss'] or
+            get('reg-names', 's') != ['freq-domain0', 'freq-domain1', 'freq-domain2'] or
+            [int(x, 16) for x in get('reg', 'x')] != [0x18591000, 0x1000, 0x18592000, 0x1000, 0x18593000, 0x1000] or
+            [int(x, 16) for x in get('qcom,lut-row-size', 'x')] != [4]):
+        raise ValueError('Stock CPU frequency profile requires the verified munch EPSS layout')
 
 
 def intermediate_kernel(original, checkpoint):
@@ -187,6 +216,7 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
         if len(hello) > 65536 or hello[:4] != b'\xcf\xfa\xed\xfe':
             raise ValueError('Expected a small Mach-O RAM root')
     ios = None
+    recovered = None
     cmdline = CMDLINE
     if checkpoint == 58:
         if not no_early_bootargs or ios_config is None:
@@ -194,7 +224,17 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
         ios = json.loads(ios_config.read_text())
         if ios['version'] != '16.5' or ios['build'] != '20F66':
             raise ValueError('Unreviewed iOS version')
-        for key in ('system', 'root', 'identity'):
+        if 'reference_ramboot' in ios:
+            from recover_ramboot import recover, REFERENCE_SHA
+            info = ios['reference_ramboot']
+            if info['sha256'] != REFERENCE_SHA:
+                raise ValueError('Unknown recovery reference')
+            recovered = recover(Path(info['path']))
+            if (ios['system'] != recovered['system'] or
+                    Path(ios['identity']['path']).read_bytes() != recovered['identity'] or
+                    fd_path.read_bytes() != recovered['fd'] or dtb_path.read_bytes() != recovered['dtb']):
+                raise ValueError('Recovery identity, system checks, FD or DTB differs from the inspected reference')
+        for key in (('root', 'identity') if recovered is not None else ('system', 'root', 'identity')):
             info = ios[key]
             path = Path(info['path'])
             with path.open('rb') as stream:
@@ -235,6 +275,64 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
                 if type(te) is not bool or (te and not json.loads(source_report).get('display_te_staging')):
                     raise ValueError('TE requires the reviewed staging kernel')
                 extra += 'munch_te=1 ' if te else ''
+                scan = native.get('display_scan', False)
+                if type(scan) is not bool or (scan and (te or hz != 60 or
+                        not json.loads(source_report).get('display_command_staging'))):
+                    raise ValueError('Scan sync requires command-staging sources, 60 Hz and display_te=false')
+                extra += 'fb_scan=1 ' if scan else ''
+                hud = native.get('display_scan_hud', False)
+                if type(hud) is not bool or (hud and (not scan or
+                        not json.loads(source_report).get('display_status_hud'))):
+                    raise ValueError('Scan HUD requires scan sync and matching diagnostic sources')
+                extra += 'fb_scan_hud=1 ' if hud else ''
+                compositor = native.get('compositor_profile', 'baseline')
+                if compositor not in ('baseline', 'umi-fast'):
+                    raise ValueError('Unsupported compositor profile')
+                if compositor == 'umi-fast':
+                    if not scan or not json.loads(source_report).get('surface_cache_sources'):
+                        raise ValueError('umi-fast requires staged scan sync and surface cache handoff')
+                    # Match UMI composition settings. Absence of glwait=1 lets
+                    # the bridge defer GPU completion to HakiosWaitsForGPU;
+                    # unlike glwait=0 it retains the bridge fallback wait.
+                    extra = extra.replace('glwait=1 ', '') + 'fb_threads=6 fb_filter=0 '
+                cpu_profile = native.get('cpu_frequency_profile', 'firmware')
+                if cpu_profile not in ('firmware', 'stock-max'):
+                    raise ValueError('Unsupported CPU frequency profile')
+                if cpu_profile == 'stock-max':
+                    if not scan:
+                        raise ValueError('Stock CPU profile is reviewed only with the native scan profile')
+                    check_munch_epss(dtb_path)
+                    # CPU EPSS matches munch DT. DDR BCM votes remain
+                    # unvalidated on munch, so never enable them here.
+                    extra += 'cpufreq=1 ddr=0 '
+                wifi_probe = native.get('wifi_probe', 'disabled')
+                if wifi_probe not in ('disabled', 'survey-return', 'power-enumeration-return'):
+                    raise ValueError('Unsupported munch Wi-Fi diagnostic')
+                if wifi_probe in ('survey-return', 'power-enumeration-return'):
+                    wifi_sources = json.loads(source_report)
+                    wifi_include = root / 'devices/poco-f4/wifi/munch-wifi-survey.inc'
+                    if (not (wifi_sources.get('wifi_survey_only') or wifi_sources.get('wifi_diagnostic_only')) or
+                            wifi_sources.get('wifi_survey_sha256') != sha(wifi_include.read_bytes()) or
+                            b'MUNCH Wi-Fi: survey %s; returning to loader' not in kernel):
+                        raise ValueError('Wi-Fi survey requires the matching gated diagnostic kernel')
+                    wifi_step = native.get('wifi_survey_step', 1)
+                    if type(wifi_step) is not int or wifi_step not in ((3, 4) if wifi_probe == 'power-enumeration-return' else (1, 2)):
+                        raise ValueError('Unsupported Wi-Fi survey step')
+                    if wifi_step >= 2:
+                        check_munch_wifi_power_layout(dtb_path)
+                    if wifi_step >= 3:
+                        if sha(dtb_path.read_bytes()) != 'da0ef458ed5b563b7c0e444aeb923e2360f82b345673153c9996bd20c1c9603c':
+                            raise ValueError('Power enumeration requires the exact captured munch DT')
+                        for name in ('munch-wifi-enumeration.inc', 'munch-wifi-dma-survey.inc', 'munch-wifi-memory.inc', 'munch-wifi-memory-ranges.h', 'munch-wifi-pcie.inc',
+                                     'munch-wifi-pcie.h', 'munch-wifi-phy.h', 'munch-wifi-rpmh.inc'):
+                            if wifi_sources.get('wifi_diagnostic_sources', {}).get(name) != sha((wifi_include.parent / name).read_bytes()):
+                                raise ValueError('Power diagnostic source hash mismatch: ' + name)
+                    extra += f'munch_wifi_step={wifi_step} munch_wifi_return=1 '
+                    if native.get('wifi_memory_preflight', False):
+                        if native['wifi_memory_preflight'] is not True or wifi_step != 4:
+                            raise ValueError('Memory preflight requires step 4 return diagnostic')
+                        extra += 'munch_wifi_memory=1 '
+
                 cmdline = (f'cpus=8 small_cores_after=0 munch_touch=1 gpu=1 adreno_speed={speed} '
                            + extra + f'loader_return_after={seconds}')
                 if verbose:
@@ -244,7 +342,10 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
                            'adreno_pause=0 adreno_watch=20 adreno_return=1 loader_return_after=120')
     fd = fd_path.read_bytes()
     metadata = json.loads(fd_path.with_suffix(fd_path.suffix + '.munch.json').read_text())
-    if (metadata.get('target') != 'munch' or metadata.get('diagnostic_revision') != (3 if checkpoint == 58 else 2) or
+    recovery_fd = (ios is not None and recovered is not None and
+                   metadata.get('recovered_from_reference') == recovered['reference_sha256'])
+    if (metadata.get('target') != 'munch' or
+            (not recovery_fd and metadata.get('diagnostic_revision') != (3 if checkpoint == 58 else 2)) or
             metadata.get('fd_sha256') != sha(fd) or len(fd) != 0x300000):
         raise ValueError('Expected the reviewed revision-2 F4 FD')
     model = subprocess.check_output(['fdtget', str(dtb_path), '/', 'model'], text=True).strip()
@@ -256,6 +357,86 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
         shutil.copy2(root / 'xnuloader/efi.h', work / 'efi.h')
         subprocess.run(['patch', '--batch', '--forward', '-p1', '-i', str(here / 'checkpoint-loader.patch')],
                        cwd=work, check=True)
+        if native is not None and native.get('wifi_probe') in ('survey-return', 'power-enumeration-return'):
+            if native.get('loader_quiet', False):
+                raise ValueError('Wi-Fi survey requires the visible loader console')
+            loader_source = (work / 'loader.c').read_text()
+            full_log = '\t\tfor (uint64_t i = 0; i < klog_len; i++) put_char(klog[i]);'
+            compact_log = '''\t\t/* USB commands are disabled in this one-shot loader. Keep
+\t\t * the hardware survey visible for a photograph instead. */
+\t\tstatic const char tag[] = "MUNCH Wi-Fi:";
+\t\tunsigned found = 0;
+\t\tprint("\\nMUNCH WIFI SURVEY (screen log; USB disabled)\\n");
+\t\tfor (uint64_t line = 0; line < klog_len;) {
+\t\t\tuint64_t end = line;
+\t\t\twhile (end < klog_len && klog[end] != '\\n') end++;
+\t\t\tfor (uint64_t pos = line; pos + sizeof(tag) - 1 <= end; pos++) {
+\t\t\t\tif (memcmp(klog + pos, tag, sizeof(tag) - 1)) continue;
+\t\t\t\tfor (uint64_t i = pos; i < end; i++) put_char(klog[i]);
+\t\t\t\tput_char('\\n'); found++; break;
+\t\t\t}
+\t\t\tline = end < klog_len ? end + 1 : end;
+\t\t}
+\t\tif (!found) {
+\t\t\tprint("No Wi-Fi survey lines; last kernel log follows:\\n");
+\t\t\tuint64_t start = klog_len > 1800 ? klog_len - 1800 : 0;
+\t\t\tfor (uint64_t i = start; i < klog_len; i++) put_char(klog[i]);
+\t\t}'''
+            if loader_source.count(full_log) != 1:
+                raise ValueError('Unexpected checkpoint log printer')
+            summary = native.get('wifi_screen_summary', False)
+            if type(summary) is not bool:
+                raise ValueError('wifi_screen_summary must be boolean')
+            if summary:
+                helper = here / 'wifi-screen-summary.inc'
+                shutil.copy2(helper, work / helper.name)
+                hook = 'static void\nwrite_logs(const char *klog, uint64_t klog_len)'
+                if loader_source.count(hook) != 1:
+                    raise ValueError('Unexpected Wi-Fi screen summary hook')
+                loader_source = loader_source.replace(hook, '#include "wifi-screen-summary.inc"\n\n' + hook, 1)
+                compact_log = '\t\tif (!munch_wifi_show_summary(klog, klog_len)) {\n' + compact_log + '\n\t\t}'
+            (work / 'loader.c').write_text(loader_source.replace(full_log, compact_log, 1))
+        if native is not None and native.get('wifi_usb_log', False):
+            if native.get('wifi_usb_log') is not True or native.get('wifi_probe') not in ('survey-return', 'power-enumeration-return'):
+                raise ValueError('USB log export requires an explicit Wi-Fi return diagnostic')
+            loader_source = (work / 'loader.c').read_text()
+            header = 'static int64_t\nusb_wait(uint8_t endpoint)'
+            loader_source = loader_source.replace(header,
+                'static int munch_usb_log_active;\nstatic uint64_t munch_usb_log_deadline;\n\n' + header, 1)
+            wait_guard = '\t\tif (running_live != NULL && READ_SYSREG(CNTVCT_EL0) - began > 3 * freq) {'
+            if loader_source.count(wait_guard) != 1:
+                raise ValueError('Unexpected USB wait guard')
+            loader_source = loader_source.replace(wait_guard,
+                '\t\tif ((running_live != NULL || munch_usb_log_active) &&\n'
+                '\t\t    (READ_SYSREG(CNTVCT_EL0) - began > 3 * freq ||\n'
+                '\t\t     (munch_usb_log_active && READ_SYSREG(CNTVCT_EL0) >= munch_usb_log_deadline))) {\n'
+                '\t\t\tif (munch_usb_log_active && USB->abort_xfer) USB->abort_xfer(endpoint);', 1)
+            disconnect = '\t\t\tusb_connected = (data.device_state == UsbDeviceStateConnected);\n\t\t\treturn -1;'
+            if loader_source.count(disconnect) != 1:
+                raise ValueError('Unexpected USB disconnect wait path')
+            loader_source = loader_source.replace(disconnect,
+                '\t\t\tusb_connected = (data.device_state == UsbDeviceStateConnected);\n'
+                '\t\t\tif (!munch_usb_log_active || !usb_connected) return -1;\n\t\t\tcontinue;', 1)
+            chunk = '#define USB_CHUNK    (1024 * 1024)'
+            if loader_source.count(chunk) != 1:
+                raise ValueError('Unexpected USB transfer chunk')
+            loader_source = loader_source.replace(chunk, '#define USB_CHUNK    (64 * 1024) /* bounded log export */', 1)
+            # Include after usb_start/usb_tx and before efi_main. Retain the
+            # existing pi.usb_mode rejection; the general server stays unused.
+            hook = 'efi_status EFIAPI\nefi_main(efi_handle image, efi_system_table *st)'
+            if loader_source.count(hook) != 1:
+                raise ValueError('Unexpected EFI entry for USB log export')
+            loader_source = loader_source.replace(hook, '#include "wifi-usb-log.inc"\n\n' + hook, 1)
+            run = '\t\trun_kernel(1, pi.checkpoint);'
+            if loader_source.count(run) != 1:
+                raise ValueError('Unexpected one-shot Wi-Fi return hook')
+            loader_source = loader_source.replace(run, run +
+                '\n\t\tif (munch_usb_log_server()) {\n\t\t\tBS->stall(200000);\n'
+                '\t\t\tST->rt->reset_system(0, 0, 0, NULL);\n\t\t}', 1)
+            helper = (here / 'wifi-usb-log.inc').read_text()
+            helper = helper.replace('static int munch_usb_log_active;\nstatic uint64_t munch_usb_log_deadline;\n', '')
+            (work / 'wifi-usb-log.inc').write_text(helper)
+            (work / 'loader.c').write_text(loader_source)
         if native is not None and native.get('loader_quiet', False):
             if type(native['loader_quiet']) is not bool or native.get('loader_bottom_console', False):
                 raise ValueError('Quiet loader requires a boolean flag and no bottom console')
@@ -385,8 +566,17 @@ def pack(fd_path, dtb_path, output, checkpoint=1, no_early_bootargs=False, ios_c
                   'image_size': output.stat().st_size, 'shim_size': len(shim),
                   'bootshim_revision': 2, 'shim_source_sha256': sha((uefi / 'bootshim.S').read_bytes()), 'dtb_sha256': sha(dtb_path.read_bytes()),
                   'ramroot_sha256': sha(hello) if hello is not None else None,
-                  'contains_xnu': True, 'contains_ios': ios is not None, 'identity': 'local-ipsw' if ios is not None else 'placeholder',
+                  'contains_xnu': True, 'contains_ios': ios is not None,
+                  'identity': 'recovered-reference' if recovered is not None else ('local-ipsw' if ios is not None else 'placeholder'),
+                  'recovered_inputs': ({'reference': ios['reference_ramboot'], 'system': recovered['system'],
+                                        'identity_sha256': sha(recovered['identity']),
+                                        'reference_loader_sha256': recovered['loader_sha256']}
+                                       if recovered is not None else None),
                   'device_tested': False, 'touch_prototype': touch_report, 'native_gpu': native}
+        if native is not None and native.get('wifi_usb_log', False):
+            report['wifi_usb_log_sha256'] = sha((here / 'wifi-usb-log.inc').read_bytes())
+        if native is not None and native.get('wifi_screen_summary', False):
+            report['wifi_screen_summary_sha256'] = sha((here / 'wifi-screen-summary.inc').read_bytes())
         output.with_suffix(output.suffix + '.json').write_text(json.dumps(report, indent=2) + '\n')
         print(f'Built XNU checkpoint-{checkpoint} probe: {output}')
 
