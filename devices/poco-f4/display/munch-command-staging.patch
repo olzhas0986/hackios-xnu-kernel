@@ -1,0 +1,386 @@
+--- a/iokit/Kernel/MiniIOMobileFramebuffer.cpp
++++ b/iokit/Kernel/MiniIOMobileFramebuffer.cpp
+@@ -38,6 +38,7 @@
+ #include "MiniIOSurface.h"
+ 
+ extern "C" void hakios_tl(const char * format, ...) __printflike(1, 2);
++#include "munch-command-scan.inc"
+ 
+ /* IOConnectCallMethod selectors of the framebuffer user client (iOS 16.5) */
+ enum {
+@@ -152,6 +153,7 @@
+  */
+ static TUNABLE(uint32_t, gFilter, "fb_filter", 1);
+ static TUNABLE(uint32_t, gRefreshHz, "fb_hz", kFBRefreshHz);
++static TUNABLE(uint32_t, gScanHud, "fb_scan_hud", 0);
+ static TUNABLE(uint32_t, gOnTheBeat, "fb_beat", 1);
+ /*
+  * Boot-arg fb_threads=N (1 to 8): so many processors scale a frame onto the panel together (see
+@@ -183,9 +185,12 @@
+ 	return ns / 1000;
+ }
+ 
++static uint32_t gScanHz;
++
+ static inline uint32_t
+ refreshHz(void)
+ {
++	if (gScanHz != 0) return gScanHz;
+ 	return gRefreshHz >= 1 && gRefreshHz <= 240 ? gRefreshHz : kFBRefreshHz;
+ }
+ static inline uint32_t
+@@ -228,6 +233,15 @@
+ public:
+ 	IOLock *        fLock;
+ 	uint8_t *       fBase;                  /* the boot framebuffer: the panel */
++	IOBufferMemoryDescriptor * fComposeMemory;
++	uint8_t *       fComposeBase;           /* command-mode composition, away from display DMA */
++	uint64_t        fCopyNs;
++	IOBufferMemoryDescriptor * fProbeMemory;
++	uint8_t *       fProbeBase;
++	uint64_t        fLastProbe;
++	volatile uint64_t fLastCopy;
++	volatile uint32_t fFrameStage, fMonitorBeat;
++	uint32_t        fConsecutiveMisses;
+ 	uint32_t        fPanelWidth, fPanelHeight, fRowBytes;
+ 	uint32_t        fWidth, fHeight;        /* the display as user space sees it */
+ 	MiniIOSurface * fDefaultSurface;
+@@ -249,6 +263,7 @@
+ 	uint8_t         fSwap[SWAP_QUEUE][SWAP_SIZE];   /* the swaps on their way to the panel (fb_queue), from fSwapFirst on */
+ 	MiniIOSurface * fSwapSurfaces[SWAP_QUEUE][SWAP_LAYERS]; /* ... their surfaces, held from SwapEnd on: their maker may let go of them */
+ 	unsigned        fSwapFirst, fSwapsWaiting;
++	uint64_t        fNextTicket, fCompletedTicket;
+ 	/*
+ 	 * ... and not whenever the GPU happens to be done, but on a beat of the refresh rate
+ 	 * (boot-arg fb_beat=0: at once): frames then follow each other at an even pace whatever
+@@ -263,6 +278,7 @@
+ 	 * their beat: neither a slow one nor a quick one then lands on the wrong side of it.
+ 	 */
+ 	uint64_t        fBeat;                  /* the beat the last frame was shown on */
++	uint32_t        fStatScanWaits, fStatScanMissed;
+ 	uint64_t        fReady;                 /* when the last frame was ready to be shown */
+ 	uint32_t        fStatOnBeat;            /* frames that waited for a refresh, and for how long together */
+ 	uint64_t        fStatBeatWait;
+@@ -296,6 +312,9 @@
+ 	void publishModes(void);
+ 	MiniIOSurface * defaultSurface(void);
+ 	void present(const uint8_t * swap);
++	void completeSwap(void);
++	bool remeasureCopy(void);
++	static void monitorMain(void * self, wait_result_t result);
+ 	void show(const uint8_t * swap, MiniIOSurface ** surfaces);
+ 	void presenter(void);
+ 	static void presenterMain(void * self, wait_result_t result);
+@@ -390,6 +409,14 @@
+ IOMobileFramebuffer::start(IOService * provider)
+ {
+ 	thread_t thread;
++	fComposeMemory = NULL;
++	fComposeBase = NULL;
++	fCopyNs = 4000000;
++	fProbeMemory = NULL;
++	fProbeBase = NULL;
++	fLastProbe = fLastCopy = mach_absolute_time();
++	fFrameStage = fMonitorBeat = fConsecutiveMisses = 0;
++	fNextTicket = fCompletedTicket = 0;
+ 
+ 	if (!IOService::start(provider)) {
+ 		return false;
+@@ -475,6 +502,47 @@
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	/* for who draws with the GPU (userland/src/eagl.c): a frame need not be waited for before it is handed over */
+ 	setProperty("HakiosWaitsForGPU", kOSBooleanTrue);
++	/* the panel's scan, if it can be read: its rate is then the one published, unless fb_hz= is given */
++	IORegistryEntry * board = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
++	OSData * type = board ? OSDynamicCast(OSData, board->getProperty("device_type")) : NULL;
++	bool munch = type && type->getLength() == 6 && memcmp(type->getBytesNoCopy(), "munch", 6) == 0;
++	if (board != NULL) board->release();
++	gScanReason = 2;
++	if (munch && fPanelWidth == 1080 && fPanelHeight == 2400 && fRowBytes == 4320 && hakios_display_scan_start()) {
++		uint32_t hz;
++		const struct hakios_display_scan * scan = hakios_display_scan();
++
++		if (!PE_parse_boot_argn("fb_hz", &hz, sizeof(hz)) && scan != NULL) {
++			gScanHz = (scan->millihz + 500) / 1000;
++		}
++		IOLog("MiniIOMobileFramebuffer: frames follow the panel's scan, at %u a second\n", refreshHz());
++		if (hakios_display_command_mode()) {
++			uint64_t bytes = (uint64_t)fRowBytes * fPanelHeight;
++			if (bytes <= 64 * 1024 * 1024)
++				fComposeMemory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++				    kIODirectionInOut, bytes, PAGE_SIZE);
++			if (fComposeMemory != NULL) {
++				fComposeBase = (uint8_t *)fComposeMemory->getBytesNoCopy();
++				memcpy(fComposeBase, fBase, bytes);
++				uint64_t copy_start = mach_absolute_time();
++				memcpy(fBase, fComposeBase, bytes);
++				__asm__ volatile("dsb oshst" ::: "memory");
++				absolutetime_to_nanoseconds(mach_absolute_time() - copy_start, &fCopyNs);
++				uint64_t now_ns;
++				absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++				munch_copy_observe(now_ns, fCopyNs);
++				hakios_tl("display: command-mode staging buffer: %llu bytes\n", bytes);
++			} else {
++				::scan.ok = 0; gScanReason = 15;
++				gScanHz = 0;
++				hakios_tl("display: no staging buffer; original presentation retained\n");
++			}
++		}
++	}
++	if (gScanHud && kernel_thread_start(&IOMobileFramebuffer::monitorMain, this, &thread) == KERN_SUCCESS) {
++		thread_set_thread_name(thread, "display liveness");
++		thread_deallocate(thread);
++	}
+ 	publishModes();
+ 	setName("disp0");
+ 	registerService();
+@@ -612,7 +680,7 @@
+ 		if (y < 0 || (uint32_t) y >= fPanelHeight) {
+ 			continue;
+ 		}
+-		to = (uint32_t *) (fBase + (size_t) y * fRowBytes);
++		to = (uint32_t *) ((fComposeBase != NULL ? fComposeBase : fBase) + (size_t) y * fRowBytes);
+ 		if (job->unscaled) {
+ 			/* not scaled at all */
+ 			memcpy(to + px0, pixels + (size_t) (sy + y - py0) * stride + (size_t) sx * 4, (size_t) sw * 4);
+@@ -890,8 +958,81 @@
+ 		fSwapSurfaces[slot][layer] = sid != 0 ? MiniIOSurfaceCopy(sid) : NULL;
+ 	}
+ 	fSwapsWaiting++;
++	uint64_t ticket = ++fNextTicket;
+ 	IOLockWakeup(fSwapLock, fSwap, true);
++	/* A source surface must not be handed back to CoreAnimation while the CPU
++	 * is still scaling it into the command-mode staging buffer. Once staged,
++	 * the panel wait no longer needs the source and can overlap the next render.
++	 */
++	while (fComposeBase != NULL && fCompletedTicket < ticket) {
++		IOLockSleep(fSwapLock, &fCompletedTicket, THREAD_UNINT);
++	}
+ 	IOLockUnlock(fSwapLock);
++}
++
++void
++IOMobileFramebuffer::completeSwap(void)
++{
++	IOLockLock(fSwapLock);
++	fSwapFirst = (fSwapFirst + 1) % SWAP_QUEUE;
++	fSwapsWaiting--;
++	fCompletedTicket++;
++	IOLockWakeup(fSwapLock, &fSwapsWaiting, true);
++	IOLockWakeup(fSwapLock, &fCompletedTicket, false);
++	IOLockUnlock(fSwapLock);
++}
++
++/* Re-measure with an unchanged front image: a scheduling outlier must not
++ * leave a permanent high-water budget that can never fit the TE idle window.
++ * The pending composed image is not touched, and no new pixels are presented
++ * during this measurement. Only the presenter performs full front copies.
++ */
++bool
++IOMobileFramebuffer::remeasureCopy(void)
++{
++	size_t bytes = (size_t)fRowBytes * fPanelHeight;
++	if (fProbeMemory == NULL) {
++		fProbeMemory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++		    kIODirectionInOut, bytes, PAGE_SIZE);
++		if (fProbeMemory == NULL) return false;
++		fProbeBase = (uint8_t *)fProbeMemory->getBytesNoCopy();
++	}
++	memcpy(fProbeBase, fBase, bytes);
++	uint64_t now_ns;
++	for (unsigned sample = 0; sample < 3; sample++) {
++		uint64_t start = mach_absolute_time(), ns;
++		memcpy(fBase, fProbeBase, bytes);
++		__asm__ volatile("dsb oshst" ::: "memory");
++		absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
++		if (!ns) return false;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++		munch_copy_observe(now_ns, ns);
++	}
++	fCopyNs = munch_copy_budget(now_ns);
++	hakios_tl("display: identical-front copy remeasured recent peak %llu us after missed windows\n", fCopyNs / 1000);
++	return true;
++}
++
++/* A diagnostic thread, independent of the presenter and VSync thread calls.
++ * No locks and no display-register reads. A stalled presenter must not leave
++ * a permanently stale HUD looking as though its last frame were still live.
++ * Only the diagnostic rectangle is painted, after 250 ms without a new copy.
++ */
++void
++IOMobileFramebuffer::monitorMain(void * self, wait_result_t result __unused)
++{
++	IOMobileFramebuffer * fb = (IOMobileFramebuffer *)self;
++	for (;;) {
++		delay_for_interval(500, NSEC_PER_MSEC);
++		uint64_t age;
++		absolutetime_to_nanoseconds(mach_absolute_time() - fb->fLastCopy, &age);
++		fb->fMonitorBeat++;
++		if (age >= 250 * NSEC_PER_MSEC) {
++			munch_scan_hud(fb->fBase, fb->fPanelWidth, fb->fPanelHeight, fb->fRowBytes,
++			    fb->fCopyNs, fb->fSwapsShown, fb->fStatScanMissed, fb->fComposeBase != NULL,
++			    fb->fMonitorBeat, fb->fFrameStage, (uint32_t)(age / NSEC_PER_MSEC));
++		}
++	}
+ }
+ 
+ void
+@@ -921,6 +1062,7 @@
+ 			}
+ 		}
+ 		MiniIOSurfaceClearKept();               /* (the next frame is some milliseconds away) */
++		fFrameStage = 0;
+ 	}
+ }
+ 
+@@ -932,17 +1074,23 @@
+ 	uint64_t began = mach_absolute_time(), nanos, ready, shown, drawn;
+ 	uint32_t layers = 0;
+ 	MiniIOSurface * recorded = NULL;
+-	bool report;
++	bool report, stagedReleased = false;
++	fFrameStage = 1;
+ 
+ 	for (unsigned layer = 0; layer < SWAP_LAYERS; layer++) {
+ 		if (surfaces[layer] != NULL && !MiniIOSurfaceDrawn(surfaces[layer], SWAP_GPU_MS)) {
++			if (fComposeBase != NULL) {
++				hakios_tl("display: staged swap %u GPU timeout; frame skipped\n", swapWord(swap, SWAP_ID));
++				completeSwap();
++				return;
++			}
+ 			IOLog("MiniIOMobileFramebuffer: swap %u: the GPU is not done with surface %u after %u ms; shown as it is\n",
+ 			    swapWord(swap, SWAP_ID), swapWord(swap, SWAP_SURFACE(layer)), SWAP_GPU_MS);
+ 		}
+ 	}
+ 	fStatWaiting += mach_absolute_time() - began;
+ 	began = ready = mach_absolute_time();
+-	if (gOnTheBeat) {
++	if (fComposeBase == NULL && gOnTheBeat) {
+ 		uint64_t period, aim, next;
+ 
+ 		nanoseconds_to_absolutetime(NSEC_PER_SEC / refreshHz(), &period);
+@@ -967,12 +1115,9 @@
+ 		}
+ 	}
+ 	shown = began;
+-	/* its turn has come: the swap after it may be handed over */
+-	IOLockLock(fSwapLock);
+-	fSwapFirst = (fSwapFirst + 1) % SWAP_QUEUE;
+-	fSwapsWaiting--;
+-	IOLockWakeup(fSwapLock, &fSwapsWaiting, true);
+-	IOLockUnlock(fSwapLock);
++	/* Staged sources stay owned until the CPU has consumed every layer. */
++	if (fComposeBase == NULL) completeSwap();
++	fFrameStage = 2;
+ 	IOLockLock(fLock);
+ 	if (fLastFrame != 0) {
+ 		absolutetime_to_nanoseconds(began - fLastFrame, &nanos);
+@@ -1008,7 +1153,7 @@
+ 			/* the bottom layer taken away: nothing is shown, the screen is black */
+ 			if (layer == 0 && (set & 1) && fGraphics) {
+ 				for (uint32_t y = 0; y < fPanelHeight; y++) {
+-					bzero(fBase + (size_t) y * fRowBytes, (size_t) fPanelWidth * 4);
++					bzero((fComposeBase != NULL ? fComposeBase : fBase) + (size_t) y * fRowBytes, (size_t) fPanelWidth * 4);
+ 				}
+ 			}
+ 			continue;
+@@ -1039,7 +1184,62 @@
+ 			}
+ 		}
+ 	}
++	if (gScanHud) munch_scan_hud(fComposeBase != NULL ? fComposeBase : fBase,
++	    fPanelWidth, fPanelHeight, fRowBytes, fCopyNs, fSwapsShown, fStatScanMissed, fComposeBase != NULL, fMonitorBeat, fFrameStage, 0);
++	if (fComposeBase != NULL) {
++		/* Only this presenter writes fComposeBase. All source pixels have now
++		 * been consumed, so CoreAnimation may render its next frame while we
++		 * wait for TE and copy this private buffer to the panel. Recordings
++		 * still sample source pixels below, so keep their old ownership span.
++		 */
++		if (fRecBase == NULL) {
++			completeSwap();
++			stagedReleased = true;
++		}
++		const struct hakios_display_scan * scan = hakios_display_scan();
++		fFrameStage = 3;
++		fStatScanWaits++;
++		if (scan != NULL && hakios_display_wait_copy(fCopyNs, scan->frame_ns * 3 / 2)) {
++			uint64_t copy_start = mach_absolute_time(), copy_ns;
++			shown = copy_start;
++			fFrameStage = 4;
++			memcpy(fBase, fComposeBase, (size_t)fRowBytes * fPanelHeight);
++			__asm__ volatile("dsb oshst" ::: "memory");
++			absolutetime_to_nanoseconds(mach_absolute_time() - copy_start, &copy_ns);
++			uint64_t now_ns;
++			absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++			munch_copy_observe(now_ns, copy_ns);
++			fCopyNs = munch_copy_budget(now_ns);
++			munch_presented(now_ns);
++			fConsecutiveMisses = 0;
++			fLastCopy = mach_absolute_time();
++			if (fSwapsShown < 5)
++				hakios_tl("display: staged frame %u copied in %llu us\n", fSwapsShown, copy_ns / 1000);
++		} else {
++			/* Keep the previous complete picture if this frame misses its window. */
++			fStatScanMissed++;
++			fConsecutiveMisses++;
++			uint64_t since_probe;
++			absolutetime_to_nanoseconds(mach_absolute_time() - fLastProbe, &since_probe);
++			if (::scan.ok && fConsecutiveMisses >= 3 && since_probe >= 500 * NSEC_PER_MSEC) {
++				fLastProbe = mach_absolute_time();
++				fFrameStage = 6;
++				(void)remeasureCopy();
++				fConsecutiveMisses = 0;
++			}
++			if (gScanHud && !::scan.ok) munch_scan_hud(fBase, fPanelWidth, fPanelHeight,
++			    fRowBytes, fCopyNs, fSwapsShown, fStatScanMissed, true);
++			if (fSwapsShown < 5) hakios_tl("display: staged frame %u missed its idle window\n", fSwapsShown);
++		}
++	}
++	fFrameStage = 5;
++	if (fComposeBase == NULL) {
++		uint64_t now_ns;
++		absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
++		munch_presented(now_ns);
++	}
+ 	drawn = mach_absolute_time();
++	absolutetime_to_nanoseconds(drawn - began, &nanos);
+ 	if (recorded != NULL) {
+ 		record(recorded);
+ 	}
+@@ -1076,6 +1276,12 @@
+ 		    waiting / fStatFrames / NSEC_PER_USEC, fStatOnBeat, fStatOnBeat ? beat / fStatOnBeat / NSEC_PER_USEC : 0,
+ 		    fStatHeld, fStatLost, fStatSwapsLate);
+ 		fStatSwapsLate = 0;
++		if (fStatScanWaits != 0) {
++			IOLog("MiniIOMobileFramebuffer: the scan (fb_scan): %u staged frames copied in the measured DMA idle interval, %u did not "
++			    "get there in time; %llu us to put a frame into the panel's memory\n", fStatScanWaits - fStatScanMissed,
++			    fStatScanMissed, fCopyNs / NSEC_PER_USEC);
++			fStatScanWaits = fStatScanMissed = 0;
++		}
+ 		for (different = 0; different < 8 && fStatSurfaces[different] != 0; different++) {
+ 		}
+ 		if (different == 8 && fStatFrames > 8) {
+@@ -1105,6 +1311,7 @@
+ 		fStatSince = 0;
+ 	}
+ 	IOLockUnlock(fLock);
++	if (fComposeBase != NULL && !stagedReleased) completeSwap();
+ }
+ 
+ /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+@@ -1234,6 +1441,15 @@
+ 
+ 	/* one refresh after the last, not after whenever we got round to this: the rate does not drift */
+ 	nanoseconds_to_absolutetime(NSEC_PER_SEC / refreshHz(), &period);
++	if (hakios_display_scan() != NULL) {
++		/* fb_scan: when the panel's next frame begins, by its scan -- locked to it, never drifting */
++		uint64_t ahead;
++
++		nanoseconds_to_absolutetime(hakios_display_next_frame_ns(), &ahead);
++		fVSyncTime = now + (ahead != 0 ? ahead : period);
++		thread_call_enter_delayed(fVSyncCall, fVSyncTime);
++		return;
++	}
+ 	fVSyncTime += period;
+ 	if (fVSyncTime <= now || fVSyncTime > now + 2 * period) {
+ 		fVSyncTime = now + period;
