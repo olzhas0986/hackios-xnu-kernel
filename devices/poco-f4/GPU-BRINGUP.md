@@ -29,7 +29,7 @@ runtime authentication. Firmware stays outside Git.
 `gpu/stage-kernel.py` requires the prepared XNU 8796.121.2 base
 `c54f35ca767986246321eb901baf8f5ff7923f6a` and checks the upstream GPU source hash.
 It applies the A650 patch, stages FT3658U behind `munch_touch=1`, bypasses the
-premature bootcpu query and selects baseline or opt-in TE framebuffer staging.
+premature bootcpu query and selects baseline, legacy GPIO TE staging, or opt-in command-DMA framebuffer staging.
 
 ```sh
 python3 devices/poco-f4/gpu/stage-kernel.py /path/to/prepared-xnu \
@@ -98,6 +98,15 @@ execution. The r4 drawing result subsequently confirmed hardware commands ran.
 | 587-MHz comparison | Requests reviewed speed index 5; does not change physical display timing |
 | Session r1 | Disables ten-minute return; enables synthetic display notifications and GL wait |
 | TE-staging r1 | Felt slower and did not resolve tearing; rolled back |
+| Command-DMA r1 | User reports successful boot, tearing remains; scan activation unknown |
+| Command-DMA r2 | User HUD confirms SCAN OFF E12; command scan rejected calibration |
+| Command-DMA r3 | User confirms ACTIVE and no tearing, then image/HUD froze at frame 433 |
+| Command-DMA r4 | User reports no freezes; photo shows 26 missed windows with a ~179-us admission interval |
+| Command-DMA r5 | Initially zero misses, then user photo shows 22 with COPY 5678 us |
+| Command-DMA r6 | User reports ~60 Hz panel and 20–29 presented FPS |
+| UMI-fast r7 | User reports successful boot and 30–48 FPS after an earlier pre-loader exception |
+| UMI-fast r8 | FPS-only compact HUD; tests/build/image verification passed, device test pending |
+| UMI-fast CPU r7 | Adds stock-table CPU maximum, with DDR votes disabled and EPSS DT checks; verified, device test pending |
 | Quiet r1 | Preferred recorded image; baseline framebuffer, 4-ms touch sleep, screen logs suppressed |
 
 The original iOS GPU image failed before XNU with a UEFI exception. An independent

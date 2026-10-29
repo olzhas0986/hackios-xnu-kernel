@@ -59,6 +59,39 @@ actual online count needs runtime evidence. The preferred quiet profile uses
 reviewed GPU speed index 5. A zero return interval disables the deliberate
 session timer; it does not prevent panic returns.
 
+## Recovering the supplied pre-GPU image
+
+`recover_ramboot.py` supports the inspected `munch-ios165-ramboot.img` only,
+SHA256 `86c028bfa606e296e4e3e0e35121f88e2032009aba30d95a94a2f6b182b939eb`.
+It checks the entire image and loader hashes before extracting the FD, live DTB,
+base helper and iOS identity tables. Table addresses/counts and system-length/
+CRC instructions were checked in that loader. The generated `ios.json` retains
+its existing 2,476,732,416-byte system read and CRC32 `81ec3d39`; the system itself
+is not downloaded or read on the host. This does not validate what is currently
+on the phone; the rebuilt loader performs the original CRC check at boot.
+
+```sh
+python3 devices/poco-f4/loader/recover_ramboot.py /path/to/munch-ios165-ramboot.img \
+    --output /path/to/new-recovered-directory
+```
+
+The recovered FD metadata names its reference hash rather than inventing a
+build revision. The packer reopens the pinned reference and checks FD, DTB,
+identity and system parameters before accepting the recovered config. For a GPU
+image, replace that config's root entry with the verified new GPU helper and use
+a matching native GPU config. The old loader cannot simply be reused: its
+command-line guard and single-core publication would reject the new profile,
+and it lacks the native touch/SCM handoff. The packer rebuilds it and uses the
+corrected bootshim. The original image stays unchanged.
+
+GPU/scan r1 uses the device firmware archive supplied locally, Mesa 25.0.7,
+`display_scan=true`, `display_te=false`, `compositor_hz=60`, GPU speed index 5,
+4-ms native touch polling, and the quiet loader with no fixed session-return
+timer. `prepare-gl-helper.py --no-compression` builds a plain APFS helper when
+Python multiprocessing IPC is unavailable; the roughly 20-MiB helper fits the
+existing RAM limits and is still checked by apfsck and complete content readback.
+No generated identity, firmware or helper bytes belong in Git.
+
 ## Handoff and return
 
 The overlay requires the observed F4 GOP geometry, BGR format and stride, uses
@@ -116,3 +149,9 @@ ZIP integrity alone does not establish their compatibility.
 
 Boot the verified Android image with `fastboot boot IMAGE`. A raw FD is not a
 boot image. No persistent iOS data setup is provided.
+
+Wi-Fi return diagnostics can explicitly set `wifi_usb_log: true` in the native
+config to expose a five-minute read-only fastboot RAM-log server after cleanup.
+See [Wi-Fi USB log instructions](../wifi/README.md#usb-ram-log-export-r1).
+The general USB dispatcher stays disabled. `check-wifi-usb.py` tests export
+framing, command restrictions and failed transfer handling under ASan/UBSan.

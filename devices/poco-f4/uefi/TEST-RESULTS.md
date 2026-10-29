@@ -105,3 +105,16 @@ requested; their actual online count has not been captured.
 Pending: boot `munch-display-scan-r1.img` and record TE configuration plus three
 Window summaries before adapting UMI's write-pointer synchronization. Physical
 120 Hz, sustained stability, audio, Wi-Fi and modem support remain unestablished.
+
+## R7 pre-loader exception report
+
+The user reported an exception before xnuloader with
+`munch-ios165-gpu-fast-r7.img` (the variant without CPU frequency changes).
+The supplied photo includes ShmBridgeDxe/ScmDxe and DxeCore frames, ending in
+ArmCpuDxe's exception-handler assertion. The image was independently verified
+again after the report. Its shim (416 bytes), 3-MiB FD and appended live DTB
+hashes are identical to the working r6 image; the r7 decompressed blob is only
+16 bytes larger. This excludes an intentional FD/shim/DTB change and does not
+prove the runtime placement or secure-firmware state was identical. Boot origin
+and a same-state r6 control test are pending. No binary workaround is justified
+from the photo alone; compositor settings are consumed after this stage.
